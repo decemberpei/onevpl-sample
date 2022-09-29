@@ -1,0 +1,3 @@
+# don't track decoded and encoded files.
+decoded.yuv
+encoded.h264
