@@ -9,7 +9,10 @@ using namespace std;
 
 int main()
 {
-    decode();
+    //decode();
     encode();
+
+    cout << "main() done. press any key to quit." << endl;
+    cin.get();
     return 0;
 }

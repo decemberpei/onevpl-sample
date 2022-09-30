@@ -6,6 +6,8 @@
 #include "vpl/mfxdispatcher.h"
 
 using namespace std;
+#define HYPER_ENCODE
+#define HEVC
 
 mfxStatus ReadRawFrame(mfxFrameSurface1* surface, FILE* f) {
 	mfxU16 w, h, i, pitch;
@@ -114,6 +116,7 @@ void WriteEncodedStream(mfxBitstream& bs, FILE* f) {
 }
 
 void encode() {
+	cout << "encode." << endl;
 
 	bool isDraining = false;
 	bool isStillGoing = true;
@@ -131,10 +134,58 @@ void encode() {
 
 	mfxStatus sts = MFX_ERR_NONE;
 
-	mfxVideoParam encodeParams = {};
 	mfxFrameSurface1* encSurfaceIn = NULL;
 
 	mfxSyncPoint syncp = {};
+
+	// Initialize encode parameters
+	mfxVideoParam encodeParams = {};
+
+#ifdef HYPER_ENCODE
+	mfxExtHyperModeParam hyperModeParam = { };
+	hyperModeParam.Mode = MFX_HYPERMODE_ON;
+	hyperModeParam.Header.BufferId = MFX_EXTBUFF_HYPER_MODE_PARAM;
+	hyperModeParam.Header.BufferSz = sizeof(hyperModeParam);
+
+	mfxExtBuffer *ext_buffers[1];
+	ext_buffers[0] = (mfxExtBuffer*)&hyperModeParam;
+
+	encodeParams.NumExtParam = 1;
+	encodeParams.ExtParam = ext_buffers;
+#endif 
+#ifdef HEVC
+	encodeParams.mfx.CodecId = MFX_CODEC_HEVC;
+#else
+	encodeParams.mfx.CodecId = MFX_CODEC_AVC;
+#endif
+	encodeParams.mfx.TargetUsage = MFX_TARGETUSAGE_BALANCED;
+	encodeParams.mfx.TargetKbps = 4000;
+	encodeParams.mfx.RateControlMethod = MFX_RATECONTROL_VBR;
+	encodeParams.mfx.FrameInfo.FrameRateExtN = 30;
+	encodeParams.mfx.FrameInfo.FrameRateExtD = 1;
+#ifdef HYPER_ENCODE
+#ifdef HEVC
+	encodeParams.mfx.IdrInterval = 1;
+#else
+	encodeParams.mfx.IdrInterval = 0;
+#endif
+	encodeParams.mfx.LowPower = MFX_CODINGOPTION_ON;
+	encodeParams.mfx.GopPicSize = 30;
+	encodeParams.AsyncDepth = 60;
+#endif
+	if (MFX_IMPL_SOFTWARE == 0) {
+		encodeParams.mfx.FrameInfo.FourCC = MFX_FOURCC_I420;
+	}
+	else {
+		encodeParams.mfx.FrameInfo.FourCC = MFX_FOURCC_NV12;
+	}
+#define ALIGN16(value)           (((value + 15) >> 4) << 4)
+	encodeParams.mfx.FrameInfo.ChromaFormat = MFX_CHROMAFORMAT_YUV420;
+	encodeParams.mfx.FrameInfo.Width = ALIGN16(1920);
+	encodeParams.mfx.FrameInfo.Height = ALIGN16(1080);
+	encodeParams.mfx.FrameInfo.CropW = encodeParams.mfx.FrameInfo.Width;
+	encodeParams.mfx.FrameInfo.CropH = encodeParams.mfx.FrameInfo.Height;
+	encodeParams.IOPattern = MFX_IOPATTERN_IN_SYSTEM_MEMORY;
 
 	loader = MFXLoad();
 	if (NULL == loader)
@@ -143,9 +194,12 @@ void encode() {
 	cfg = MFXCreateConfig(loader);
 	if (NULL == cfg)
 		goto cleanup;
-
 	cfgVal.Type = MFX_VARIANT_TYPE_U32;
+#ifdef HEVC
+	cfgVal.Data.U32 = MFX_CODEC_HEVC;
+#else
 	cfgVal.Data.U32 = MFX_CODEC_AVC;
+#endif
 	sts = MFXSetConfigFilterProperty(cfg, (mfxU8*)"mfxImplDescription.mfxEncoderDescription.encoder.CodecID", cfgVal);
 	if (MFX_ERR_NONE != sts)
 		goto cleanup;
@@ -158,31 +212,14 @@ void encode() {
 	if (MFX_ERR_NONE != sts)
 		goto cleanup;
 
-	// Initialize encode parameters
-	encodeParams.mfx.CodecId = MFX_CODEC_AVC;
-	encodeParams.mfx.TargetUsage = MFX_TARGETUSAGE_BALANCED;
-	encodeParams.mfx.TargetKbps = 4000;
-	encodeParams.mfx.RateControlMethod = MFX_RATECONTROL_VBR;
-	encodeParams.mfx.FrameInfo.FrameRateExtN = 30;
-	encodeParams.mfx.FrameInfo.FrameRateExtD = 1;
-	if (MFX_IMPL_SOFTWARE == 0) {
-		encodeParams.mfx.FrameInfo.FourCC = MFX_FOURCC_I420;
-	}
-	else {
-		encodeParams.mfx.FrameInfo.FourCC = MFX_FOURCC_NV12;
-	}
-#define ALIGN16(value)           (((value + 15) >> 4) << 4)
-	encodeParams.mfx.FrameInfo.ChromaFormat = MFX_CHROMAFORMAT_YUV420;
-	encodeParams.mfx.FrameInfo.CropW = 1920;
-	encodeParams.mfx.FrameInfo.CropH = 1080;
-	encodeParams.mfx.FrameInfo.Width = ALIGN16(1920);
-	encodeParams.mfx.FrameInfo.Height = ALIGN16(1080);
-	encodeParams.IOPattern = MFX_IOPATTERN_IN_SYSTEM_MEMORY;
-
 	// Initialize encoder
 	sts = MFXVideoENCODE_Init(session, &encodeParams);
-	if (MFX_ERR_NONE != sts)
-		goto cleanup;
+	if (MFX_ERR_NONE != sts) {
+		cout << "MFXVideoENCODE_Init error: " << sts << endl;
+		if (MFX_ERR_NONE > sts) {
+			goto cleanup;
+		}
+	}
 
 	bitstream.MaxLength = 2000000;
 	bitstream.Data = (mfxU8*)calloc(bitstream.MaxLength, sizeof(mfxU8));
@@ -278,5 +315,5 @@ cleanup:
 	if (loader)
 		MFXUnload(loader);
 
-	cout << "encode." << endl;
+	cout << "encode done." << endl;
 }
