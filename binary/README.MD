@@ -1,0 +1,1 @@
+this folder contains the binary (and test files if needed) of this project. the binary is supposed to be runnable out of box.
